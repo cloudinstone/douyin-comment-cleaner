@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "douyin-comment-cleaner"
+version = "0.1.0"
+description = "Zero-dependency ADB CLI tool to batch-delete outbound comments on Douyin"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+douyin-comment-cleaner = "douyin_cleaner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
