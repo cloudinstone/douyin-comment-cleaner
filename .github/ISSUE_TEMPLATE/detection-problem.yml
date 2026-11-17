@@ -1,35 +1,36 @@
-name: Detection problem
-description: The tool fails to find comments, the delete menu, or a dialog
+name: 识别问题
+description: 工具找不到评论、删除菜单或确认框
 labels: [bug]
 body:
   - type: input
     id: device
     attributes:
-      label: Device and Android version
+      label: 设备型号和 Android 版本
       placeholder: Pixel 7 Pro, Android 17
     validations:
       required: true
   - type: input
     id: douyin
     attributes:
-      label: Douyin version
+      label: 抖音版本
       placeholder: "40.4.0"
     validations:
       required: true
   - type: textarea
     id: output
     attributes:
-      label: Output of `status` and `inspect`
+      label: "`status` 和 `inspect` 的输出"
+      description: 请先删除昵称和评论内容
       render: text
     validations:
       required: true
   - type: textarea
     id: details
     attributes:
-      label: What happened, and what did you expect?
+      label: 发生了什么？期望的行为是什么？
     validations:
       required: true
   - type: markdown
     attributes:
       value: |
-        If you attach a UI dump (`inspect --save-xml dump.xml`), remove nicknames and comment text first.
+        如需附上界面 dump（`inspect --save-xml dump.xml`），请先删除其中的昵称和评论内容。

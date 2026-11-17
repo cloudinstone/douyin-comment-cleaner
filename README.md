@@ -1,112 +1,104 @@
 # Douyin Comment Cleaner
 
-[简体中文](README.zh-CN.md) | English
+一个零依赖的命令行工具，用于批量删除你在**抖音上发出的评论**。
 
-A zero-dependency CLI that bulk-deletes the comments **you have posted** on Douyin (抖音), the Chinese version of TikTok.
-
-Douyin has no "select all / delete all" option for your own comment history. You have to long-press each comment and tap delete, one at a time. This tool does those taps for you on a connected Android phone, using ADB and the Android UI hierarchy dump. It does not use private APIs, reverse-engineered request signing, or a companion app.
+抖音没有提供"全选 / 一键删除"自己历史评论的功能，只能逐条长按删除。本工具通过 ADB 读取 Android 界面结构并模拟触摸，在已连接的安卓手机上自动完成这些操作。不调用私有接口、不逆向签名、不需要在手机上安装任何辅助 App。
 
 > [!WARNING]
-> Deletion is **irreversible**. This project is not affiliated with Douyin or ByteDance. Automating the app may conflict with the platform's terms of service. Use it on your own account and at your own risk. See [Disclaimer](#disclaimer).
+> 删除操作**不可恢复**。本项目与抖音 / 字节跳动无任何关联。自动化操作可能违反平台服务条款，请仅用于你自己的账号并自行承担风险。详见[免责声明](#免责声明)。
 
-## Features
+## 特性
 
-- **Pure Python standard library.** Needs only `adb` and Python 3.10+. Nothing is installed on the phone.
-- **UI-hierarchy based.** Comment rows and the delete menu are found by reading the screen structure, not fixed coordinates, so it works across screen sizes.
-- **Safety stops.** It stops when it sees a rate-limit or captcha prompt, when the screen locks, when the wrong app is in front, or when the "发出的评论" (sent comments) tab is not selected.
-- **Self-recovery.** If a tap accidentally opens a video or profile page, it presses BACK and continues.
-- **Skips undeletable items.** Comments with no delete option (for example, when the original video was removed) are skipped instead of looping forever.
-- **Filters and limits.** `--contains`, `--exclude`, `--limit` and `--dry-run`.
-- **Audit log.** Every deleted comment is appended to a local JSONL file.
+- **纯 Python 标准库**：只需要 `adb` 和 Python 3.10+，手机端无需安装任何东西。
+- **基于界面结构识别**：通过读取屏幕控件树定位评论和删除菜单，而不是写死坐标，适配不同分辨率。
+- **安全急停**：检测到"操作太频繁"/验证码、锁屏、前台不是抖音、或未选中「发出的评论」标签时自动停止。
+- **自动纠偏**：误触进入视频页或个人主页时，自动按返回键回到列表。
+- **跳过不可删条目**：没有删除选项的评论（例如原视频已被删除）会被跳过，不会死循环。
+- **过滤与限量**：支持 `--contains`、`--exclude`、`--limit`、`--dry-run`。
+- **审计日志**：每条被删除的评论都会追加记录到本地 JSONL 文件（仅保存在本机，含评论原文，不要分享或提交到仓库）。
 
-## Requirements
+## 前置要求
 
-- A computer with [`adb`](https://developer.android.com/tools/adb) (Android platform-tools) and Python >= 3.10
-  - macOS: `brew install --cask android-platform-tools`
-- An Android phone or emulator with **USB debugging** enabled and the Douyin app signed in
-- `adb devices` must list the device as `device` (not `unauthorized`)
+- 电脑安装 [`adb`](https://developer.android.com/tools/adb)（Android platform-tools）和 Python >= 3.10
+  - macOS：`brew install --cask android-platform-tools`
+- 安卓手机或模拟器，已开启 **USB 调试**，并已登录抖音
+- `adb devices` 中设备状态为 `device`（不是 `unauthorized`）
 
-iOS is not supported. iOS does not allow this kind of cross-app UI automation. If your account is on an iPhone, sign in to the same account in an Android emulator.
+不支持 iOS（iOS 不允许此类跨应用 UI 自动化）。如果账号在 iPhone 上，可以在安卓模拟器中登录同一账号使用。
 
-## Quick start
+## 快速开始
 
-1. On the phone, open Douyin and go to your sent-comments list:
-   - **消息 (Messages)** → **互动消息 (Interactions)** → top dropdown **全部消息 ▾** → **发出的评论 (Sent comments)**, or
-   - **我 (Me)** → **≡** → **我的评论 (My comments)**
-2. Run from the repository root (no installation needed):
+1. 在手机上打开抖音，进入"发出的评论"列表：
+   - **消息** → **互动消息** → 顶部下拉 **全部消息 ▾** → **发出的评论**，或
+   - **我** → 右上角 **≡** → **我的评论**
+2. 在项目目录下直接运行（无需安装）：
 
 ```sh
 git clone https://github.com/cloudinstone/douyin-comment-cleaner.git
 cd douyin-comment-cleaner
 
-./douyin-comment-cleaner status          # device, lock state, is Douyin ready?
-./douyin-comment-cleaner inspect         # show detected comment rows (read-only)
-./douyin-comment-cleaner run --dry-run   # preview, no taps
-./douyin-comment-cleaner run --limit 1   # delete one comment, then check it is gone
-./douyin-comment-cleaner run             # delete everything
+./douyin-comment-cleaner status          # 检查设备、锁屏状态、抖音页面是否就绪
+./douyin-comment-cleaner inspect         # 查看识别到的评论条目（只读）
+./douyin-comment-cleaner run --dry-run   # 演练，不点击
+./douyin-comment-cleaner run --limit 1   # 先删 1 条，确认确实被删掉
+./douyin-comment-cleaner run             # 全部删除
 ```
 
-Optional: install it as a global command.
+也可以安装为全局命令：
 
 ```sh
-uv tool install .      # or: pipx install .
+uv tool install .      # 或：pipx install .
 douyin-comment-cleaner status
 ```
 
-Press `Ctrl+C` at any time to stop.
+随时按 `Ctrl+C` 停止。
 
-## Usage
+## 参数说明
 
-```
-douyin-comment-cleaner status  [-s SERIAL]
-douyin-comment-cleaner inspect [-s SERIAL] [--save-xml PATH]
-douyin-comment-cleaner run     [-s SERIAL] [options]
-```
-
-| Option | Default | Description |
+| 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `-s, --serial` | auto | ADB device serial. Required if more than one device is connected. |
-| `--dry-run` | off | Detect rows and scroll, but never long-press or delete. |
-| `--limit N` | `0` | Stop after N deletions. `0` means no limit. |
-| `--min-delay` / `--max-delay` | `0` / `0` | Random pause in seconds between deletions. Raise these if Douyin starts rate-limiting you. |
-| `--long-press-ms` | `600` | Long-press duration in milliseconds. |
-| `--max-empty-scrolls` | `5` | Stop after this many scrolls that reveal no new comments. |
-| `--contains TEXT` | – | Only delete comments whose row text contains `TEXT`. |
-| `--exclude TEXT` | – | Never delete comments whose row text contains `TEXT`. |
-| `--log-file PATH` | `logs/deleted_comments.jsonl` | Where to append the audit log. |
+| `-s, --serial` | 自动 | ADB 设备序列号，连接多台设备时必填 |
+| `--dry-run` | 关 | 只识别和滚动，不长按、不删除 |
+| `--limit N` | `0` | 删除 N 条后停止，`0` 表示不限 |
+| `--min-delay` / `--max-delay` | `0` / `0` | 每次删除之间的随机等待秒数，遇到风控时调高 |
+| `--long-press-ms` | `600` | 长按时长（毫秒） |
+| `--max-empty-scrolls` | `5` | 连续滚动多少次没有新评论后停止 |
+| `--contains TEXT` | – | 只删除包含 `TEXT` 的评论 |
+| `--exclude TEXT` | – | 跳过包含 `TEXT` 的评论 |
+| `--log-file PATH` | `logs/deleted_comments.jsonl` | 审计日志路径 |
 
-## How it works
+## 工作原理
 
-Each deletion goes through this loop:
+每删一条评论，按以下流程循环：
 
-1. `adb exec-out uiautomator dump` reads the current UI tree.
-2. The parser finds comment rows, menus, confirmation dialogs, captcha or rate-limit prompts, and the end of the list.
-3. It long-presses the first eligible row at the horizontal center, away from the avatar and the video thumbnail.
-4. It dumps the UI again, taps **删除 (Delete)**, and handles a confirmation dialog if one appears.
-5. When no eligible rows are left on screen, it scrolls and repeats.
+1. 用 `adb exec-out uiautomator dump` 读取当前界面控件树。
+2. 解析出评论条目、弹出菜单、确认框、风控 / 验证码提示和列表底部标记。
+3. 在第一条符合条件的评论的水平中心长按，避开左侧头像和右侧视频缩略图。
+4. 再读取一次界面，点击 **删除**；如果出现确认框，一并处理。
+5. 当前屏幕没有可删条目后，向下滚动，继续下一轮。
 
-**Speed.** Each `uiautomator dump` takes about 2 s on a typical phone, and each deletion needs two dumps. That works out to roughly **5–7 seconds per comment**, set by ADB rather than by an artificial delay.
+**速度**：一次 `uiautomator dump` 约 2 秒，每条评论需要 2 次，所以约 **5–7 秒 / 条**。瓶颈在 ADB 本身，而不是人为设置的等待。
 
-## Tested on
+## 已测试环境
 
-| Device | Android | Douyin |
+| 设备 | Android | 抖音版本 |
 | --- | --- | --- |
 | Pixel 7 Pro | 17 | 40.4.0 |
 
-Douyin changes its UI often. If detection breaks on your version, run `./douyin-comment-cleaner inspect --save-xml dump.xml` and open an issue with the output. Remove any personal content from the XML before attaching it.
+抖音界面改版频繁。如果在你的版本上识别失败，请运行 `./douyin-comment-cleaner inspect --save-xml dump.xml`，并附上输出提交 issue。附上 XML 前请先删除其中的个人内容。
 
-## Development
+## 开发
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## Disclaimer
+## 免责声明
 
-This software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)). It is an independent project and is not endorsed by, affiliated with, or supported by Douyin or ByteDance. You are responsible for how you use it, including compliance with the platform's terms of service and any applicable laws. Deleted comments cannot be restored. The authors are not liable for account restrictions, data loss, or any other consequences.
+本软件按"原样"提供，不附带任何形式的担保（见 [LICENSE](LICENSE)）。本项目为独立项目，未获得抖音或字节跳动的认可、授权或支持。使用者需自行对使用方式负责，包括遵守平台服务条款及相关法律法规。被删除的评论无法恢复。对于账号受限、数据丢失或其他任何后果，作者不承担责任。
 
-## License
+## 许可证
 
 [MIT](LICENSE)

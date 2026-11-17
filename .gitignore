@@ -8,3 +8,5 @@ build/
 logs/
 *.xml
 .DS_Store
+*.jsonl
+.env

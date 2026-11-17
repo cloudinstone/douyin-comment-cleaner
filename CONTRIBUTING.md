@@ -1,31 +1,31 @@
-# Contributing
+# 贡献指南
 
-Thanks for your interest. Bug reports and pull requests are welcome.
+欢迎提交 issue 和 pull request。
 
-## Reporting a detection problem
+## 报告识别问题
 
-Douyin changes its UI often, so most bugs come from the parser no longer recognizing a screen. Please include:
+抖音界面改版频繁，大部分问题都是解析器无法识别新版界面。提交时请附上：
 
-1. Your device model, Android version and Douyin version (Douyin: 我 → ≡ → 设置 → 关于抖音)
-2. The output of `./douyin-comment-cleaner status` and `./douyin-comment-cleaner inspect`
-3. If possible, a UI dump captured with `./douyin-comment-cleaner inspect --save-xml dump.xml`
+1. 设备型号、Android 版本和抖音版本（抖音：我 → ≡ → 设置 → 关于抖音）
+2. `./douyin-comment-cleaner status` 和 `./douyin-comment-cleaner inspect` 的输出
+3. 如果可以，附上用 `./douyin-comment-cleaner inspect --save-xml dump.xml` 导出的界面结构
 
 > [!IMPORTANT]
-> UI dumps contain the text on your screen, including nicknames and comment content. Redact personal data before attaching them.
+> 界面 dump 和 `inspect` 输出包含屏幕上的文字，包括昵称和评论内容。提交前请先删除个人信息。
 
-## Development setup
+## 开发
 
-No dependencies are required beyond Python >= 3.10.
+除 Python >= 3.10 外没有任何依赖。
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-## Guidelines
+## 约定
 
-- Use only the Python standard library at runtime.
-- Write code and comments in English. Douyin UI strings such as `"删除"` stay as literals.
-- Follow PEP 8.
-- Add a test in `tests/` for parser changes, preferably using a small, anonymized XML fixture.
-- Prefer detecting UI elements by text, class and structure over obfuscated resource IDs, which change between Douyin releases.
-- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages, for example `fix(parser): detect new delete menu layout`.
+- 运行时只使用 Python 标准库。
+- 代码和注释使用英文；`"删除"` 等抖音界面文字保留为字符串常量。
+- 遵循 PEP 8。
+- 修改解析器时，在 `tests/` 中补充测试，测试数据请使用精简并匿名化的 XML。
+- 优先通过文字、控件类名和结构识别界面元素，不要依赖混淆过的 resource-id（每次抖音发版都可能变化）。
+- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)，例如 `fix(parser): detect new delete menu layout`。

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "douyin-comment-cleaner"
 version = "0.1.0"
-description = "Bulk-delete the comments you posted on Douyin via Android ADB UI automation"
+description = "通过 Android ADB 自动化批量删除自己在抖音发出的评论"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
