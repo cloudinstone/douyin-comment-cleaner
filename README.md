@@ -30,7 +30,7 @@
 # 4. 小批量试跑（例如先删 5 条）
 ./douyin-comment-cleaner run --limit 5
 
-# 5. 全量清理（默认每次删除随机间隔 1.5s ~ 2.8s）
+# 5. 全量清理（默认无间隔，可用 --min-delay/--max-delay 调整）
 ./douyin-comment-cleaner run
 ```
 
@@ -47,8 +47,8 @@ douyin-comment-cleaner status
 - `-s, --serial`: 指定目标设备序列号（多台设备同时连接时必填）
 - `--dry-run`: 仅演练识别与滚动，不触发真实触摸删除
 - `--limit N`: 最多删除 N 条后自动停止（`0` 表示不限制）
-- `--min-delay SEC` / `--max-delay SEC`: 每次删除之间的随机等待区间（默认 `1.5` ~ `2.8` 秒，避免过快触发风控）
-- `--long-press-ms MS`: 长按时长（默认 `800` ms）
+- `--min-delay SEC` / `--max-delay SEC`: 每次删除之间的随机等待区间（默认 `0`，若遇风控再调高）
+- `--long-press-ms MS`: 长按时长（默认 `600` ms）
 - `--contains TEXT`: 仅删除行文本包含指定关键词的评论
 - `--exclude TEXT`: 跳过行文本包含指定关键词的评论
 - `--log-file PATH`: 已删除评论的 JSONL 审计日志路径（默认 `logs/deleted_comments.jsonl`）

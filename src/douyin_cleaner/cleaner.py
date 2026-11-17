@@ -13,6 +13,9 @@ from .adb import AdbClient
 from .parser import Bounds, CommentRow, ScreenAnalysis, analyze_screen
 
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
+# Short pause to let popup/menu animations settle before the next UI dump
+SETTLE_DELAY = 0.3
+
 DRIFT_ACTIVITY_HINTS = (
     "DetailActivity",
     "UserProfileActivity",
@@ -26,9 +29,9 @@ class CleanerConfig:
     """Runtime configuration for CommentCleaner."""
 
     limit: int = 0
-    min_delay: float = 1.5
-    max_delay: float = 2.8
-    long_press_ms: int = 800
+    min_delay: float = 0.0
+    max_delay: float = 0.0
+    long_press_ms: int = 600
     max_empty_scrolls: int = 5
     dry_run: bool = False
     contains: str | None = None
@@ -58,6 +61,7 @@ class CommentCleaner:
         self.consecutive_wrong_activity = 0
         self._last_viewport_fps: set[str] = set()
         self._initial_activity: str | None = None
+        self._awaiting_confirm = False
 
     def run(self) -> CleanerResult:
         """Execute the batch deletion loop until finished, limited, or halted."""
@@ -120,8 +124,13 @@ class CommentCleaner:
                     print("[DRY-RUN] Confirmation dialog visible; stopping preview.")
                     stopped_reason = "dry_run_dialog"
                     break
-                self._tap_confirm_and_record(analysis.confirm_button, row=None)
-                self._sleep_between_deletes()
+                cx, cy = analysis.confirm_button.center
+                self.adb.tap(cx, cy)
+                time.sleep(SETTLE_DELAY)
+                # Deletion was already recorded when "删除" was tapped
+                if not self._awaiting_confirm:
+                    self._record_deletion(None)
+                self._awaiting_confirm = False
                 continue
 
             if analysis.delete_button is not None:
@@ -138,6 +147,8 @@ class CommentCleaner:
                 self._sleep_between_deletes()
                 continue
 
+            # No dialog on screen: any pending delete/confirm flow is finished
+            self._awaiting_confirm = False
             target_row = self._pick_next_row(analysis)
             if target_row is not None:
                 if self.config.dry_run:
@@ -269,7 +280,7 @@ class CommentCleaner:
     ) -> str | None:
         tx, ty = row.tap_point
         self.adb.long_press(tx, ty, duration_ms=self.config.long_press_ms)
-        time.sleep(random.uniform(0.8, 1.1))
+        time.sleep(SETTLE_DELAY)
 
         post_xml = self.adb.dump_hierarchy()
         post = analyze_screen(post_xml, screen_w, screen_h)
@@ -295,7 +306,7 @@ class CommentCleaner:
 
         if post.has_popup_menu:
             self.adb.press_back()
-            time.sleep(0.5)
+            time.sleep(SETTLE_DELAY)
             self.skipped_fingerprints.add(row.fingerprint)
             print(f"[SKIP] Non-deletable item (no delete option): {row.summary}")
             return None
@@ -324,31 +335,14 @@ class CommentCleaner:
         screen_w: int,
         screen_h: int,
     ) -> str | None:
+        # No re-dump here: if a confirmation dialog appears, the main loop's
+        # next dump detects and taps it without double-counting.
         dx, dy = delete_bounds.center
         self.adb.tap(dx, dy)
-        time.sleep(random.uniform(0.6, 1.0))
-
-        confirm_xml = self.adb.dump_hierarchy()
-        confirm_screen = analyze_screen(confirm_xml, screen_w, screen_h)
-
-        if confirm_screen.rate_limit_or_captcha:
-            print(
-                f"[STOP] Rate-limit or captcha prompt detected: "
-                f"{confirm_screen.rate_limit_or_captcha}"
-            )
-            return "rate_limit_or_captcha"
-
-        if confirm_screen.confirm_button is not None:
-            cx, cy = confirm_screen.confirm_button.center
-            self.adb.tap(cx, cy)
-            time.sleep(0.5)
-        elif confirm_screen.delete_button is not None:
-            # Handle secondary confirmation sheet that repeats "删除"
-            cx, cy = confirm_screen.delete_button.center
-            self.adb.tap(cx, cy)
-            time.sleep(0.5)
-
-        self._record_deletion(row)
+        time.sleep(SETTLE_DELAY)
+        if not self._awaiting_confirm:
+            self._record_deletion(row)
+        self._awaiting_confirm = True
         return None
 
     def _tap_confirm_and_record(
@@ -356,7 +350,7 @@ class CommentCleaner:
     ) -> None:
         cx, cy = confirm_bounds.center
         self.adb.tap(cx, cy)
-        time.sleep(0.5)
+        time.sleep(SETTLE_DELAY)
         self._record_deletion(row)
 
     def _record_deletion(self, row: CommentRow | None) -> None:
@@ -383,8 +377,8 @@ class CommentCleaner:
         x = screen_w // 2
         y_start = int(screen_h * 0.75)
         y_end = int(screen_h * 0.28)
-        self.adb.swipe(x, y_start, x, y_end, duration_ms=450)
-        time.sleep(random.uniform(1.3, 2.0))
+        self.adb.swipe(x, y_start, x, y_end, duration_ms=300)
+        time.sleep(0.5)
 
     def _sleep_between_deletes(self) -> None:
         low = min(self.config.min_delay, self.config.max_delay)

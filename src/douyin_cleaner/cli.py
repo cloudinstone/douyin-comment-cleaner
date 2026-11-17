@@ -60,20 +60,20 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--min-delay",
         type=float,
-        default=1.5,
-        help="Minimum random delay in seconds between deletions (default: 1.5)",
+        default=0.0,
+        help="Minimum random delay in seconds between deletions (default: 0)",
     )
     run_p.add_argument(
         "--max-delay",
         type=float,
-        default=2.8,
-        help="Maximum random delay in seconds between deletions (default: 2.8)",
+        default=0.0,
+        help="Maximum random delay in seconds between deletions (default: 0)",
     )
     run_p.add_argument(
         "--long-press-ms",
         type=int,
-        default=800,
-        help="Long-press duration in milliseconds (default: 800)",
+        default=600,
+        help="Long-press duration in milliseconds (default: 600)",
     )
     run_p.add_argument(
         "--max-empty-scrolls",
