@@ -1,62 +1,112 @@
 # Douyin Comment Cleaner
 
-通过 Android ADB 自动化批量清理抖音「发出的评论 / 我的评论」的命令行工具。零第三方 Python 依赖，开箱即用，无需在手机端安装辅助 App 或逆向接口。
+[简体中文](README.zh-CN.md) | English
 
-## 前置要求
+A zero-dependency CLI that bulk-deletes the comments **you have posted** on Douyin (抖音), the Chinese version of TikTok.
 
-1. **电脑端**：
-   - `adb`（macOS 可通过 `brew install --cask android-platform-tools` 安装）
-   - Python >= 3.10
-2. **手机端（或 Android 模拟器）**：
-   - 开启「开发者选项」和「USB 调试」并连接电脑，确保 `adb devices` 显示为 `device`
-   - 打开抖音并手动停留在 **发出的评论** 列表页：
-     - 路径 A：**消息** $\rightarrow$ **互动消息** $\rightarrow$ 顶部下拉 **全部消息 ▾** $\rightarrow$ **发出的评论**
-     - 路径 B：**我** $\rightarrow$ 右上角 **≡** $\rightarrow$ **我的评论**
+Douyin has no "select all / delete all" option for your own comment history. You have to long-press each comment and tap delete, one at a time. This tool does those taps for you on a connected Android phone, using ADB and the Android UI hierarchy dump. It does not use private APIs, reverse-engineered request signing, or a companion app.
 
-## 快速使用
+> [!WARNING]
+> Deletion is **irreversible**. This project is not affiliated with Douyin or ByteDance. Automating the app may conflict with the platform's terms of service. Use it on your own account and at your own risk. See [Disclaimer](#disclaimer).
 
-无需安装，直接在项目目录运行：
+## Features
 
-```zsh
-# 1. 检查设备连接、锁屏状态及抖音当前页面是否就绪
-./douyin-comment-cleaner status
+- **Pure Python standard library.** Needs only `adb` and Python 3.10+. Nothing is installed on the phone.
+- **UI-hierarchy based.** Comment rows and the delete menu are found by reading the screen structure, not fixed coordinates, so it works across screen sizes.
+- **Safety stops.** It stops when it sees a rate-limit or captcha prompt, when the screen locks, when the wrong app is in front, or when the "发出的评论" (sent comments) tab is not selected.
+- **Self-recovery.** If a tap accidentally opens a video or profile page, it presses BACK and continues.
+- **Skips undeletable items.** Comments with no delete option (for example, when the original video was removed) are skipped instead of looping forever.
+- **Filters and limits.** `--contains`, `--exclude`, `--limit` and `--dry-run`.
+- **Audit log.** Every deleted comment is appended to a local JSONL file.
 
-# 2. 检查当前页面识别到的评论条目与点击坐标（不执行任何操作）
-./douyin-comment-cleaner inspect
+## Requirements
 
-# 3. 演练模式（预览将被操作的条目和滑动逻辑，不实际长按或删除）
-./douyin-comment-cleaner run --dry-run
+- A computer with [`adb`](https://developer.android.com/tools/adb) (Android platform-tools) and Python >= 3.10
+  - macOS: `brew install --cask android-platform-tools`
+- An Android phone or emulator with **USB debugging** enabled and the Douyin app signed in
+- `adb devices` must list the device as `device` (not `unauthorized`)
 
-# 4. 小批量试跑（例如先删 5 条）
-./douyin-comment-cleaner run --limit 5
+iOS is not supported. iOS does not allow this kind of cross-app UI automation. If your account is on an iPhone, sign in to the same account in an Android emulator.
 
-# 5. 全量清理（默认无间隔，可用 --min-delay/--max-delay 调整）
-./douyin-comment-cleaner run
+## Quick start
+
+1. On the phone, open Douyin and go to your sent-comments list:
+   - **消息 (Messages)** → **互动消息 (Interactions)** → top dropdown **全部消息 ▾** → **发出的评论 (Sent comments)**, or
+   - **我 (Me)** → **≡** → **我的评论 (My comments)**
+2. Run from the repository root (no installation needed):
+
+```sh
+git clone https://github.com/cloudinstone/douyin-comment-cleaner.git
+cd douyin-comment-cleaner
+
+./douyin-comment-cleaner status          # device, lock state, is Douyin ready?
+./douyin-comment-cleaner inspect         # show detected comment rows (read-only)
+./douyin-comment-cleaner run --dry-run   # preview, no taps
+./douyin-comment-cleaner run --limit 1   # delete one comment, then check it is gone
+./douyin-comment-cleaner run             # delete everything
 ```
 
-如需全局命令安装，也可使用 `uv` 或 `pipx`：
+Optional: install it as a global command.
 
-```zsh
-uv tool install -e .
-# 之后可在任意目录直接执行：
+```sh
+uv tool install .      # or: pipx install .
 douyin-comment-cleaner status
 ```
 
-## 常用参数
+Press `Ctrl+C` at any time to stop.
 
-- `-s, --serial`: 指定目标设备序列号（多台设备同时连接时必填）
-- `--dry-run`: 仅演练识别与滚动，不触发真实触摸删除
-- `--limit N`: 最多删除 N 条后自动停止（`0` 表示不限制）
-- `--min-delay SEC` / `--max-delay SEC`: 每次删除之间的随机等待区间（默认 `0`，若遇风控再调高）
-- `--long-press-ms MS`: 长按时长（默认 `600` ms）
-- `--contains TEXT`: 仅删除行文本包含指定关键词的评论
-- `--exclude TEXT`: 跳过行文本包含指定关键词的评论
-- `--log-file PATH`: 已删除评论的 JSONL 审计日志路径（默认 `logs/deleted_comments.jsonl`）
+## Usage
 
-## 安全与风控机制
+```
+douyin-comment-cleaner status  [-s SERIAL]
+douyin-comment-cleaner inspect [-s SERIAL] [--save-xml PATH]
+douyin-comment-cleaner run     [-s SERIAL] [options]
+```
 
-- **精准避让点击区**：自动计算屏幕水平居中（50% 宽度）坐标长按评论文本区域，避开左侧用户头像与右侧视频缩略图。
-- **防跑偏自动回退**：若误触跳入视频详情页或个人主页，自动发送 `BACK` 返回列表页。
-- **不可删条目自动跳过**：遇到原视频已删除/隐藏导致长按无「删除」菜单的记录，自动记录指纹并跳过，不会卡死循环。
-- **风控/验证码急停**：检测到「操作太频繁」「安全验证」「拖动滑块」等提示时立即终止任务。
-- **文本过滤**：支持 `--contains` / `--exclude` 按关键词精确清理或保留特定评论。
+| Option | Default | Description |
+| --- | --- | --- |
+| `-s, --serial` | auto | ADB device serial. Required if more than one device is connected. |
+| `--dry-run` | off | Detect rows and scroll, but never long-press or delete. |
+| `--limit N` | `0` | Stop after N deletions. `0` means no limit. |
+| `--min-delay` / `--max-delay` | `0` / `0` | Random pause in seconds between deletions. Raise these if Douyin starts rate-limiting you. |
+| `--long-press-ms` | `600` | Long-press duration in milliseconds. |
+| `--max-empty-scrolls` | `5` | Stop after this many scrolls that reveal no new comments. |
+| `--contains TEXT` | – | Only delete comments whose row text contains `TEXT`. |
+| `--exclude TEXT` | – | Never delete comments whose row text contains `TEXT`. |
+| `--log-file PATH` | `logs/deleted_comments.jsonl` | Where to append the audit log. |
+
+## How it works
+
+Each deletion goes through this loop:
+
+1. `adb exec-out uiautomator dump` reads the current UI tree.
+2. The parser finds comment rows, menus, confirmation dialogs, captcha or rate-limit prompts, and the end of the list.
+3. It long-presses the first eligible row at the horizontal center, away from the avatar and the video thumbnail.
+4. It dumps the UI again, taps **删除 (Delete)**, and handles a confirmation dialog if one appears.
+5. When no eligible rows are left on screen, it scrolls and repeats.
+
+**Speed.** Each `uiautomator dump` takes about 2 s on a typical phone, and each deletion needs two dumps. That works out to roughly **5–7 seconds per comment**, set by ADB rather than by an artificial delay.
+
+## Tested on
+
+| Device | Android | Douyin |
+| --- | --- | --- |
+| Pixel 7 Pro | 17 | 40.4.0 |
+
+Douyin changes its UI often. If detection breaks on your version, run `./douyin-comment-cleaner inspect --save-xml dump.xml` and open an issue with the output. Remove any personal content from the XML before attaching it.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)). It is an independent project and is not endorsed by, affiliated with, or supported by Douyin or ByteDance. You are responsible for how you use it, including compliance with the platform's terms of service and any applicable laws. Deleted comments cannot be restored. The authors are not liable for account restrictions, data loss, or any other consequences.
+
+## License
+
+[MIT](LICENSE)
