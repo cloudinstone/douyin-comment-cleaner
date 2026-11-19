@@ -13,16 +13,22 @@ from .adb import AdbClient
 from .parser import Bounds, CommentRow, ScreenAnalysis, analyze_screen
 
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
-# Short pause to let popup/menu animations settle before the next UI dump
-SETTLE_DELAY = 0.25
+# Pause after long-press so the popup menu is fully rendered before tapping delete
+SETTLE_DELAY = 0.30
 # Pause after tapping delete inside a burst so the delete request & list animation finish
-BATCH_ROW_SETTLE_DELAY = 0.55
+BATCH_ROW_SETTLE_DELAY = 0.60
+
+COMMENT_LIST_ACTIVITY_HINTS = (
+    "NotificationDetailActivity",
+    "Comment",
+)
 
 DRIFT_ACTIVITY_HINTS = (
     "DetailActivity",
     "UserProfileActivity",
     "LivePlayActivity",
     "FeedActivity",
+    "SplashActivity",
 )
 
 
@@ -33,11 +39,13 @@ class CleanerConfig:
     limit: int = 0
     min_delay: float = 0.0
     max_delay: float = 0.0
-    long_press_ms: int = 450
+    long_press_ms: int = 550
     max_empty_scrolls: int = 5
     dry_run: bool = False
     fast: bool = True
-    batch_size: int = 5
+    batch_size: int = 6
+    verify_every: int = 5
+    audit_log: bool = False
     contains: str | None = None
     exclude: str | None = None
     log_file: Path = Path("logs/deleted_comments.jsonl")
@@ -67,7 +75,10 @@ class CommentCleaner:
         self._initial_activity: str | None = None
         self._awaiting_confirm = False
         self._cached_delete_offset: tuple[int, int] | None = None
+        self._cached_anchor_tap: tuple[int, int] | None = None
         self._last_batch_fingerprints: set[str] = set()
+        self._bursts_since_dump = 0
+        self._near_end = False
 
     def run(self) -> CleanerResult:
         """Execute the batch deletion loop until finished, limited, or halted."""
@@ -97,8 +108,16 @@ class CommentCleaner:
                 stopped_reason = "wrong_app_or_activity"
                 break
 
+            # Fast blind-burst path: skip uiautomator dump between periodic checks
+            if self._can_skip_dump():
+                count = self._compute_blind_burst_count()
+                self._execute_blind_burst(count, screen_w, screen_h)
+                continue
+
             xml_str = self.adb.dump_hierarchy()
+            self._bursts_since_dump = 0
             analysis = analyze_screen(xml_str, screen_w, screen_h)
+            self._near_end = analysis.reached_end or len(analysis.comment_rows) < 5
 
             if analysis.is_lockscreen:
                 if not self._ensure_unlocked():
@@ -144,8 +163,7 @@ class CommentCleaner:
                     print("[DRY-RUN] Delete button visible; stopping preview.")
                     stopped_reason = "dry_run_dialog"
                     break
-                self._cached_delete_offset = None
-                self._last_batch_fingerprints.clear()
+                self._reset_fast_cache()
                 halt = self._execute_delete_tap(
                     analysis.delete_button, row=None, screen_w=screen_w, screen_h=screen_h
                 )
@@ -170,12 +188,17 @@ class CommentCleaner:
 
                 if target_row.fingerprint in self._last_batch_fingerprints:
                     # Previous fast-path blind tap did not remove this row; fall back to full dump
-                    self._cached_delete_offset = None
-                    self._last_batch_fingerprints.clear()
+                    self._reset_fast_cache()
 
                 if self.config.fast and self._cached_delete_offset is not None:
-                    batch = self._pick_contiguous_batch(analysis, target_row)
-                    self._process_batch(batch, screen_w, screen_h)
+                    self._cached_anchor_tap = target_row.tap_point
+                    if self._allow_unbounded_burst():
+                        self._last_batch_fingerprints = {target_row.fingerprint}
+                        count = self._compute_blind_burst_count()
+                        self._execute_blind_burst(count, screen_w, screen_h)
+                    else:
+                        batch = self._pick_contiguous_batch(analysis, target_row)
+                        self._process_batch(batch, screen_w, screen_h)
                     continue
 
                 halt = self._process_row(target_row, screen_w, screen_h)
@@ -241,7 +264,13 @@ class CommentCleaner:
             )
             return False
 
-        if self._initial_activity is None and not self._is_drift_activity(act):
+        if self._initial_activity is None:
+            if not self._is_comment_list_activity(act):
+                print(
+                    f"[STOP] Current activity '{act}' is not the Douyin '发出的评论' list. "
+                    "Navigate to '发出的评论' before starting."
+                )
+                return False
             self._initial_activity = act
 
         is_drifted = self._is_drift_activity(act) or (
@@ -252,8 +281,7 @@ class CommentCleaner:
             and "Popup" not in act
         )
         if is_drifted:
-            self._cached_delete_offset = None
-            self._last_batch_fingerprints.clear()
+            self._reset_fast_cache()
             self.consecutive_wrong_activity += 1
             if self.consecutive_wrong_activity > 3:
                 print(
@@ -267,6 +295,12 @@ class CommentCleaner:
 
         self.consecutive_wrong_activity = 0
         return True
+
+    @staticmethod
+    def _is_comment_list_activity(activity: str) -> bool:
+        if not activity:
+            return False
+        return any(hint in activity for hint in COMMENT_LIST_ACTIVITY_HINTS)
 
     @staticmethod
     def _is_drift_activity(activity: str) -> bool:
@@ -294,6 +328,73 @@ class CommentCleaner:
         if self.config.exclude and self.config.exclude in joined:
             return False
         return True
+
+    def _reset_fast_cache(self) -> None:
+        self._cached_delete_offset = None
+        self._cached_anchor_tap = None
+        self._last_batch_fingerprints.clear()
+        self._bursts_since_dump = 0
+
+    def _allow_unbounded_burst(self) -> bool:
+        return (
+            self.config.fast
+            and not self.config.dry_run
+            and not self.config.audit_log
+            and not self.config.contains
+            and not self.config.exclude
+            and not self._near_end
+            and self.config.batch_size != 1
+        )
+
+    def _can_skip_dump(self) -> bool:
+        return (
+            self._allow_unbounded_burst()
+            and self._cached_delete_offset is not None
+            and self._cached_anchor_tap is not None
+            and self._bursts_since_dump > 0
+            and self._bursts_since_dump < max(1, self.config.verify_every)
+        )
+
+    def _compute_blind_burst_count(self) -> int:
+        count = self.config.batch_size if self.config.batch_size > 0 else 20
+        if self.config.limit > 0:
+            remaining = max(1, self.config.limit - self.deleted_count)
+            count = min(count, remaining)
+        return count
+
+    def _execute_blind_burst(
+        self, count: int, screen_w: int, screen_h: int
+    ) -> None:
+        """Burst-delete `count` comments at the cached top-row anchor without dumping."""
+        assert self._cached_delete_offset is not None
+        assert self._cached_anchor_tap is not None
+        tx, ty = self._cached_anchor_tap
+        off_x, off_y = self._cached_delete_offset
+        target_x = max(10, min(screen_w - 10, tx + off_x))
+        target_y = max(10, min(screen_h - 10, ty + off_y))
+
+        low = min(self.config.min_delay, self.config.max_delay)
+        high = max(self.config.min_delay, self.config.max_delay)
+        delays = [random.uniform(low, high) for _ in range(count)] if high > 0 else None
+
+        self.adb.batch_long_press_and_tap(
+            tx,
+            ty,
+            target_x,
+            target_y,
+            count=count,
+            long_press_ms=self.config.long_press_ms,
+            popup_settle_s=SETTLE_DELAY,
+            after_tap_s=BATCH_ROW_SETTLE_DELAY,
+            delays_s=delays,
+        )
+
+        self.deleted_count += count
+        self.empty_scrolls = 0
+        self._last_viewport_fps.clear()
+        self._awaiting_confirm = True
+        self._bursts_since_dump += 1
+        print(f"[+] Burst deleted +{count} (total: {self.deleted_count})")
 
     def _pick_contiguous_batch(
         self, analysis: ScreenAnalysis, first_row: CommentRow
@@ -372,6 +473,7 @@ class CommentCleaner:
             if self.config.fast:
                 dx, dy = post.delete_button.center
                 self._cached_delete_offset = (dx - tx, dy - ty)
+                self._cached_anchor_tap = (tx, ty)
                 print(f"[FAST] Calibrated delete offset: ({dx - tx}, {dy - ty})")
             halt = self._execute_delete_tap(post.delete_button, row, screen_w, screen_h)
             if halt:
@@ -441,6 +543,9 @@ class CommentCleaner:
 
         summary = row.summary if row else "<popup-triggered>"
         print(f"[+] Deleted #{self.deleted_count}: {summary}")
+
+        if not self.config.audit_log:
+            return
 
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

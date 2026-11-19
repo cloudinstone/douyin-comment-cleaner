@@ -247,6 +247,22 @@ class AdbClient:
         tx, ty = int(tap_x), int(tap_y)
         lp_ms = int(long_press_ms)
 
+        if not delays_s:
+            body_parts = [f"input swipe {px} {py} {px} {py} {lp_ms}"]
+            if popup_settle_s > 0:
+                body_parts.append(f"sleep {popup_settle_s:.3f}")
+            body_parts.append(f"input tap {tx} {ty}")
+            if after_tap_s > 0:
+                body_parts.append(f"sleep {after_tap_s:.3f}")
+            body = "; ".join(body_parts)
+            script = (
+                f"i=0; while [ $i -lt {count} ]; do {body}; i=$((i+1)); done"
+            )
+            per_item_s = lp_ms / 1000.0 + 0.5 + max(0.0, popup_settle_s) + max(0.0, after_tap_s)
+            timeout = max(20.0, per_item_s * count * 2.0 + 10.0)
+            self._run(["shell", script], timeout=timeout)
+            return
+
         cmds: list[str] = []
         estimated_s = 0.0
         for idx in range(count):
@@ -258,7 +274,7 @@ class AdbClient:
             cmds.append(f"input tap {tx} {ty}")
             estimated_s += 0.25
 
-            extra = delays_s[idx] if delays_s and idx < len(delays_s) else 0.0
+            extra = delays_s[idx] if idx < len(delays_s) else 0.0
             tail_sleep = (after_tap_s if idx < count - 1 else popup_settle_s) + max(
                 0.0, extra
             )

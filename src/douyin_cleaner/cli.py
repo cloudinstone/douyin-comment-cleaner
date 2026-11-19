@@ -72,8 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--long-press-ms",
         type=int,
-        default=450,
-        help="Long-press duration in milliseconds (default: 450)",
+        default=550,
+        help="Long-press duration in milliseconds (default: 550)",
     )
     run_p.add_argument(
         "--no-fast",
@@ -83,11 +83,24 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--batch-size",
         type=int,
+        default=6,
+        help=(
+            "Comments per burst in fast mode (default: 6; 1 = verify every item)"
+        ),
+    )
+    run_p.add_argument(
+        "--verify-every",
+        type=int,
         default=5,
         help=(
-            "Max comments to burst-delete per UI dump in fast mode "
-            "(default: 5; 0 = all contiguous matching rows on screen, 1 = verify every item)"
+            "Run a full UI hierarchy dump every N bursts in blind-burst mode "
+            "(default: 5; foreground drift is still checked after every burst)"
         ),
+    )
+    run_p.add_argument(
+        "--audit-log",
+        action="store_true",
+        help="Enable per-comment JSONL audit logging (limits bursts to visible rows)",
     )
     run_p.add_argument(
         "--max-empty-scrolls",
@@ -108,8 +121,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--log-file",
         type=Path,
-        default=Path("logs/deleted_comments.jsonl"),
-        help="JSONL audit log output path (default: logs/deleted_comments.jsonl)",
+        default=None,
+        help="JSONL audit log output path (implies --audit-log when specified)",
     )
 
     return parser
@@ -197,6 +210,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.batch_size < 0:
         print("Error: --batch-size must be >= 0.", file=sys.stderr)
         return 2
+    if args.verify_every < 1:
+        print("Error: --verify-every must be >= 1.", file=sys.stderr)
+        return 2
+
+    audit_log = args.audit_log or (args.log_file is not None)
+    log_file = args.log_file or Path("logs/deleted_comments.jsonl")
 
     adb = AdbClient(serial=args.serial)
     config = CleanerConfig(
@@ -208,9 +227,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         fast=not args.no_fast,
         batch_size=args.batch_size,
+        verify_every=args.verify_every,
+        audit_log=audit_log,
         contains=args.contains,
         exclude=args.exclude,
-        log_file=args.log_file,
+        log_file=log_file,
     )
     cleaner = CommentCleaner(adb=adb, config=config)
     try:

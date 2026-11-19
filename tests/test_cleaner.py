@@ -133,8 +133,9 @@ class AdbBatchCommandTests(unittest.TestCase):
         args, timeout = captured[0]
         self.assertEqual(args[0], "shell")
         script = args[1]
-        self.assertEqual(script.count("input swipe 540 568 540 568 450"), 3)
-        self.assertEqual(script.count("input tap 540 1192"), 3)
+        self.assertIn("while [ $i -lt 3 ]", script)
+        self.assertIn("input swipe 540 568 540 568 450", script)
+        self.assertIn("input tap 540 1192", script)
         self.assertGreaterEqual(timeout, 20.0)
 
 
@@ -213,6 +214,61 @@ class CleanerBatchTests(unittest.TestCase):
         # Two full calibration long-presses: initial row0 + fallback row2
         self.assertEqual(len(adb.long_presses), 2)
         self.assertEqual([call[4] for call in adb.batch_calls], [2])
+
+    def test_blind_burst_skips_dumps_until_verify_every(self) -> None:
+        rows = [_make_row(i) for i in range(6)]
+        screens = {
+            # Initial screen before calibration (6 rows -> not near_end)
+            "dump-0": _make_screen(comment_rows=rows),
+            # Calibration dump
+            "dump-1": _make_screen(delete_button=Bounds(400, 1140, 680, 1240)),
+            # Post-calibration verification dump -> triggers burst #1 (5 items)
+            "dump-2": _make_screen(comment_rows=rows[1:] + [_make_row(6)]),
+            # Burst #2 skips dump! Next dump is dump-3 after verify_every=2 bursts
+            "dump-3": _make_screen(comment_rows=[], reached_end=True),
+        }
+
+        adb = FakeAdb()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = CleanerConfig(
+                fast=True,
+                batch_size=5,
+                verify_every=2,
+                audit_log=False,
+                log_file=Path(tmpdir) / "deleted.jsonl",
+            )
+            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
+            with (
+                patch("douyin_cleaner.cleaner.analyze_screen", side_effect=lambda xml, w, h: screens[xml]),
+                patch("douyin_cleaner.cleaner.time.sleep"),
+            ):
+                result = cleaner.run()
+
+        self.assertEqual(result.stopped_reason, "reached_end")
+        # 1 calibrated delete + 2 blind bursts of 5 = 11 total
+        self.assertEqual(result.deleted_count, 11)
+        self.assertEqual([call[4] for call in adb.batch_calls], [5, 5])
+        # Only 4 dumps total (dump-0..dump-3); burst #2 skipped dumping
+        self.assertEqual(adb.dump_index, 4)
+        # Audit log disabled -> file should not be created
+        self.assertFalse((Path(tmpdir) / "deleted.jsonl").exists())
+
+    def test_refuses_to_start_outside_comment_list_activity(self) -> None:
+        adb = FakeAdb()
+        adb.get_foreground_activity = lambda: (  # type: ignore[method-assign]
+            "com.ss.android.ugc.aweme",
+            "com.ss.android.ugc.aweme.splash.SplashActivity",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = CleanerConfig(log_file=Path(tmpdir) / "deleted.jsonl")
+            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
+            result = cleaner.run()
+
+        self.assertEqual(result.deleted_count, 0)
+        self.assertEqual(result.stopped_reason, "wrong_app_or_activity")
+        self.assertEqual(adb.dump_index, 0)
+        self.assertEqual(adb.long_presses, [])
+        self.assertEqual(adb.batch_calls, [])
 
 
 if __name__ == "__main__":
