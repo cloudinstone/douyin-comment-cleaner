@@ -14,7 +14,9 @@ from .parser import Bounds, CommentRow, ScreenAnalysis, analyze_screen
 
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
 # Short pause to let popup/menu animations settle before the next UI dump
-SETTLE_DELAY = 0.3
+SETTLE_DELAY = 0.25
+# Pause after tapping delete inside a burst so the delete request & list animation finish
+BATCH_ROW_SETTLE_DELAY = 0.55
 
 DRIFT_ACTIVITY_HINTS = (
     "DetailActivity",
@@ -31,9 +33,11 @@ class CleanerConfig:
     limit: int = 0
     min_delay: float = 0.0
     max_delay: float = 0.0
-    long_press_ms: int = 600
+    long_press_ms: int = 450
     max_empty_scrolls: int = 5
     dry_run: bool = False
+    fast: bool = True
+    batch_size: int = 5
     contains: str | None = None
     exclude: str | None = None
     log_file: Path = Path("logs/deleted_comments.jsonl")
@@ -62,6 +66,8 @@ class CommentCleaner:
         self._last_viewport_fps: set[str] = set()
         self._initial_activity: str | None = None
         self._awaiting_confirm = False
+        self._cached_delete_offset: tuple[int, int] | None = None
+        self._last_batch_fingerprints: set[str] = set()
 
     def run(self) -> CleanerResult:
         """Execute the batch deletion loop until finished, limited, or halted."""
@@ -138,6 +144,8 @@ class CommentCleaner:
                     print("[DRY-RUN] Delete button visible; stopping preview.")
                     stopped_reason = "dry_run_dialog"
                     break
+                self._cached_delete_offset = None
+                self._last_batch_fingerprints.clear()
                 halt = self._execute_delete_tap(
                     analysis.delete_button, row=None, screen_w=screen_w, screen_h=screen_h
                 )
@@ -158,6 +166,16 @@ class CommentCleaner:
                     )
                     self.skipped_fingerprints.add(target_row.fingerprint)
                     self.empty_scrolls = 0
+                    continue
+
+                if target_row.fingerprint in self._last_batch_fingerprints:
+                    # Previous fast-path blind tap did not remove this row; fall back to full dump
+                    self._cached_delete_offset = None
+                    self._last_batch_fingerprints.clear()
+
+                if self.config.fast and self._cached_delete_offset is not None:
+                    batch = self._pick_contiguous_batch(analysis, target_row)
+                    self._process_batch(batch, screen_w, screen_h)
                     continue
 
                 halt = self._process_row(target_row, screen_w, screen_h)
@@ -234,6 +252,8 @@ class CommentCleaner:
             and "Popup" not in act
         )
         if is_drifted:
+            self._cached_delete_offset = None
+            self._last_batch_fingerprints.clear()
             self.consecutive_wrong_activity += 1
             if self.consecutive_wrong_activity > 3:
                 print(
@@ -275,6 +295,62 @@ class CommentCleaner:
             return False
         return True
 
+    def _pick_contiguous_batch(
+        self, analysis: ScreenAnalysis, first_row: CommentRow
+    ) -> list[CommentRow]:
+        """Collect contiguous matching rows starting at first_row for burst deletion."""
+        batch: list[CommentRow] = []
+        started = False
+        max_items = self.config.batch_size if self.config.batch_size > 0 else len(analysis.comment_rows)
+        if self.config.limit > 0:
+            remaining = max(1, self.config.limit - self.deleted_count)
+            max_items = min(max_items, remaining)
+
+        for row in analysis.comment_rows:
+            if not started:
+                if row.fingerprint != first_row.fingerprint:
+                    continue
+                started = True
+            else:
+                if row.fingerprint in self.skipped_fingerprints or not self._matches_filters(row):
+                    break
+            batch.append(row)
+            if len(batch) >= max_items:
+                break
+
+        return batch or [first_row]
+
+    def _process_batch(
+        self, rows: list[CommentRow], screen_w: int, screen_h: int
+    ) -> None:
+        """Delete a contiguous batch of rows by repeatedly tapping the top row position."""
+        assert self._cached_delete_offset is not None
+        tx, ty = rows[0].tap_point
+        off_x, off_y = self._cached_delete_offset
+        target_x = max(10, min(screen_w - 10, tx + off_x))
+        target_y = max(10, min(screen_h - 10, ty + off_y))
+
+        low = min(self.config.min_delay, self.config.max_delay)
+        high = max(self.config.min_delay, self.config.max_delay)
+        delays = [random.uniform(low, high) for _ in rows] if high > 0 else None
+
+        self.adb.batch_long_press_and_tap(
+            tx,
+            ty,
+            target_x,
+            target_y,
+            count=len(rows),
+            long_press_ms=self.config.long_press_ms,
+            popup_settle_s=SETTLE_DELAY,
+            after_tap_s=BATCH_ROW_SETTLE_DELAY,
+            delays_s=delays,
+        )
+
+        self._last_batch_fingerprints = {row.fingerprint for row in rows}
+        self._awaiting_confirm = True
+        for row in rows:
+            self._record_deletion(row)
+
     def _process_row(
         self, row: CommentRow, screen_w: int, screen_h: int
     ) -> str | None:
@@ -293,6 +369,10 @@ class CommentCleaner:
             return "rate_limit_or_captcha"
 
         if post.delete_button is not None:
+            if self.config.fast:
+                dx, dy = post.delete_button.center
+                self._cached_delete_offset = (dx - tx, dy - ty)
+                print(f"[FAST] Calibrated delete offset: ({dx - tx}, {dy - ty})")
             halt = self._execute_delete_tap(post.delete_button, row, screen_w, screen_h)
             if halt:
                 return halt
@@ -323,6 +403,7 @@ class CommentCleaner:
 
         attempts = self.retry_counts.get(row.fingerprint, 0) + 1
         self.retry_counts[row.fingerprint] = attempts
+        self._cached_delete_offset = None  # Reset cached offset to recalibrate on next try
         if attempts >= 2:
             self.skipped_fingerprints.add(row.fingerprint)
             print(f"[SKIP] Unresponsive or non-deletable item: {row.summary}")

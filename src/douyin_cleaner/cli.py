@@ -72,8 +72,22 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--long-press-ms",
         type=int,
-        default=600,
-        help="Long-press duration in milliseconds (default: 600)",
+        default=450,
+        help="Long-press duration in milliseconds (default: 450)",
+    )
+    run_p.add_argument(
+        "--no-fast",
+        action="store_true",
+        help="Disable adaptive fast-path (blind tap) deletion",
+    )
+    run_p.add_argument(
+        "--batch-size",
+        type=int,
+        default=5,
+        help=(
+            "Max comments to burst-delete per UI dump in fast mode "
+            "(default: 5; 0 = all contiguous matching rows on screen, 1 = verify every item)"
+        ),
     )
     run_p.add_argument(
         "--max-empty-scrolls",
@@ -180,6 +194,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.limit < 0:
         print("Error: --limit must be >= 0.", file=sys.stderr)
         return 2
+    if args.batch_size < 0:
+        print("Error: --batch-size must be >= 0.", file=sys.stderr)
+        return 2
 
     adb = AdbClient(serial=args.serial)
     config = CleanerConfig(
@@ -189,6 +206,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         long_press_ms=args.long_press_ms,
         max_empty_scrolls=args.max_empty_scrolls,
         dry_run=args.dry_run,
+        fast=not args.no_fast,
+        batch_size=args.batch_size,
         contains=args.contains,
         exclude=args.exclude,
         log_file=args.log_file,

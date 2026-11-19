@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from typing import Sequence
 
 
@@ -160,34 +161,39 @@ class AdbClient:
 
         return "", ""
 
-    def dump_hierarchy(self) -> str:
+    def dump_hierarchy(self, retries: int = 2) -> str:
         """Dump the current UI hierarchy XML string via uiautomator."""
-        raw = self._run(
-            ["exec-out", "uiautomator", "dump", "/dev/tty"],
-            timeout=20.0,
-            check=False,
-        )
-        xml_str = self._extract_xml(raw)
-        if xml_str:
-            return xml_str
-
-        # Fallback via /sdcard/window_dump.xml if /dev/tty output was empty/truncated
-        self._run(
-            ["shell", "uiautomator", "dump", "/sdcard/window_dump.xml"],
-            timeout=20.0,
-            check=False,
-        )
-        fallback_raw = self._run(
-            ["exec-out", "cat", "/sdcard/window_dump.xml"],
-            timeout=15.0,
-            check=False,
-        )
-        xml_str = self._extract_xml(fallback_raw)
-        if not xml_str:
-            raise AdbError(
-                "Failed to dump UI hierarchy XML. Ensure screen is unlocked and idle."
+        for attempt in range(retries + 1):
+            raw = self._run(
+                ["exec-out", "uiautomator", "dump", "/dev/tty"],
+                timeout=20.0,
+                check=False,
             )
-        return xml_str
+            xml_str = self._extract_xml(raw)
+            if xml_str:
+                return xml_str
+
+            # Fallback via /sdcard/window_dump.xml if /dev/tty output was empty/truncated
+            self._run(
+                ["shell", "uiautomator", "dump", "/sdcard/window_dump.xml"],
+                timeout=20.0,
+                check=False,
+            )
+            fallback_raw = self._run(
+                ["exec-out", "cat", "/sdcard/window_dump.xml"],
+                timeout=15.0,
+                check=False,
+            )
+            xml_str = self._extract_xml(fallback_raw)
+            if xml_str:
+                return xml_str
+
+            if attempt < retries:
+                time.sleep(0.6)
+
+        raise AdbError(
+            "Failed to dump UI hierarchy XML. Ensure screen is unlocked and idle."
+        )
 
     @staticmethod
     def _extract_xml(raw: str) -> str:
@@ -219,6 +225,49 @@ class AdbClient:
                 str(int(duration_ms)),
             ]
         )
+
+    def batch_long_press_and_tap(
+        self,
+        press_x: int,
+        press_y: int,
+        tap_x: int,
+        tap_y: int,
+        *,
+        count: int,
+        long_press_ms: int = 450,
+        popup_settle_s: float = 0.15,
+        after_tap_s: float = 0.25,
+        delays_s: Sequence[float] | None = None,
+    ) -> None:
+        """Execute multiple long-press + tap pairs in a single adb shell call."""
+        if count <= 0:
+            return
+
+        px, py = int(press_x), int(press_y)
+        tx, ty = int(tap_x), int(tap_y)
+        lp_ms = int(long_press_ms)
+
+        cmds: list[str] = []
+        estimated_s = 0.0
+        for idx in range(count):
+            cmds.append(f"input swipe {px} {py} {px} {py} {lp_ms}")
+            estimated_s += lp_ms / 1000.0 + 0.25
+            if popup_settle_s > 0:
+                cmds.append(f"sleep {popup_settle_s:.3f}")
+                estimated_s += popup_settle_s
+            cmds.append(f"input tap {tx} {ty}")
+            estimated_s += 0.25
+
+            extra = delays_s[idx] if delays_s and idx < len(delays_s) else 0.0
+            tail_sleep = (after_tap_s if idx < count - 1 else popup_settle_s) + max(
+                0.0, extra
+            )
+            if tail_sleep > 0:
+                cmds.append(f"sleep {tail_sleep:.3f}")
+                estimated_s += tail_sleep
+
+        timeout = max(20.0, estimated_s * 2.0 + 10.0)
+        self._run(["shell", "; ".join(cmds)], timeout=timeout)
 
     def swipe(
         self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400
