@@ -1,4 +1,4 @@
-"""Unit tests for CommentCleaner batch burst deletion and ADB batching."""
+"""Unit tests for the closed-loop deletion controller and device script parsing."""
 
 from __future__ import annotations
 
@@ -10,58 +10,66 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from douyin_cleaner.adb import AdbClient
+from douyin_cleaner.burst import parse_burst, parse_probe
 from douyin_cleaner.cleaner import CleanerConfig, CommentCleaner
 from douyin_cleaner.parser import Bounds, CommentRow, ScreenAnalysis
 
+LIST_ACT = "com.ss.android.ugc.aweme.socialnotice.view.activity.NotificationDetailActivity"
+DOUYIN = "com.ss.android.ugc.aweme"
 
-def _make_row(idx: int, text: str | None = None) -> CommentRow:
+
+def _row(idx: int, text: str | None = None) -> CommentRow:
     top = 445 + idx * 240
     body = text or f"comment-{idx}"
     return CommentRow(
         bounds=Bounds(0, top, 1080, top + 240),
         tap_point=(540, top + 120),
-        texts=(body,),
+        texts=[body],
         summary=body,
-        fingerprint=f"fp-{idx}",
+        fingerprint=f"fp-{body}",
     )
 
 
-def _make_screen(
+def _screen(
+    rows: list[CommentRow] | None = None,
     *,
-    comment_rows: list[CommentRow] | None = None,
     delete_button: Bounds | None = None,
+    popup: bool = False,
     reached_end: bool = False,
+    captcha: str | None = None,
 ) -> ScreenAnalysis:
     return ScreenAnalysis(
-        package="com.ss.android.ugc.aweme",
+        package=DOUYIN,
         is_lockscreen=False,
-        rate_limit_or_captcha=None,
+        rate_limit_or_captcha=captcha,
         delete_button=delete_button,
         confirm_button=None,
-        has_popup_menu=delete_button is not None,
+        has_popup_menu=popup or delete_button is not None,
         subtab_sent_comments=None,
         subtab_sent_selected=True,
-        comment_rows=comment_rows or [],
+        comment_rows=rows or [],
         reached_end=reached_end,
     )
 
 
-class FakeAdb:
-    """In-memory stub of AdbClient for deterministic state machine tests."""
+DELETE_BTN = Bounds(28, 1130, 1052, 1254)
+PROBE_DIALOG = "STATE dialog 28 1066 1052 1318\n"
 
-    def __init__(self) -> None:
-        self.dumps: list[ScreenAnalysis] = []
-        self.batch_calls: list[tuple[int, int, int, int, int]] = []
-        self.long_presses: list[tuple[int, int, int]] = []
-        self.taps: list[tuple[int, int]] = []
-        self.dump_index = 0
+
+class FakeAdb:
+    """Scripted ADB stub: screens and script outputs are consumed in order."""
+
+    def __init__(self, screens: list[ScreenAnalysis], scripts: list[str]) -> None:
+        self.screens = list(screens)
+        self.scripts = list(scripts)
+        self.foreground: list[tuple[str, str]] = []
+        self.events: list[str] = []
 
     def resolve_device(self) -> str:
-        return "TEST-SERIAL"
+        return "SER"
 
     def get_device_model(self) -> str:
-        return "Pixel Test"
+        return "Pixel"
 
     def get_screen_size(self) -> tuple[int, int]:
         return 1080, 2340
@@ -69,206 +77,178 @@ class FakeAdb:
     def is_screen_locked(self) -> bool:
         return False
 
+    def wake_up(self) -> None:
+        pass
+
     def get_foreground_activity(self) -> tuple[str, str]:
-        return (
-            "com.ss.android.ugc.aweme",
-            "com.ss.android.ugc.aweme.socialnotice.view.activity.NotificationDetailActivity",
-        )
+        if self.foreground:
+            return self.foreground.pop(0)
+        return DOUYIN, LIST_ACT
 
     def dump_hierarchy(self) -> str:
-        idx = self.dump_index
-        self.dump_index += 1
-        return f"dump-{idx}"
+        self.events.append("dump")
+        return "xml"
 
     def long_press(self, x: int, y: int, duration_ms: int = 800) -> None:
-        self.long_presses.append((x, y, duration_ms))
+        self.events.append(f"long_press {x},{y}")
 
     def tap(self, x: int, y: int) -> None:
-        self.taps.append((x, y))
-
-    def batch_long_press_and_tap(
-        self,
-        press_x: int,
-        press_y: int,
-        tap_x: int,
-        tap_y: int,
-        *,
-        count: int,
-        long_press_ms: int = 450,
-        popup_settle_s: float = 0.15,
-        after_tap_s: float = 0.25,
-        delays_s=None,
-    ) -> None:
-        self.batch_calls.append((press_x, press_y, tap_x, tap_y, count))
+        self.events.append(f"tap {x},{y}")
 
     def press_back(self) -> None:
-        pass
+        self.events.append("back")
 
-    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400) -> None:
-        pass
+    def swipe(self, *args) -> None:
+        self.events.append("swipe")
 
+    def push_text(self, content: str, remote_path: str) -> None:
+        self.events.append("push")
 
-class AdbBatchCommandTests(unittest.TestCase):
-    def test_batch_long_press_and_tap_builds_single_shell_script(self) -> None:
-        client = AdbClient(serial="SER123")
-        captured: list[tuple[list[str], float]] = []
-
-        def fake_run(args, *, with_serial=True, timeout=15.0, check=True):
-            captured.append((list(args), timeout))
-            return ""
-
-        client._run = fake_run  # type: ignore[method-assign]
-        client.batch_long_press_and_tap(
-            540,
-            568,
-            540,
-            1192,
-            count=3,
-            long_press_ms=450,
-            popup_settle_s=0.15,
-            after_tap_s=0.25,
-        )
-
-        self.assertEqual(len(captured), 1)
-        args, timeout = captured[0]
-        self.assertEqual(args[0], "shell")
-        script = args[1]
-        self.assertIn("while [ $i -lt 3 ]", script)
-        self.assertIn("input swipe 540 568 540 568 450", script)
-        self.assertIn("input tap 540 1192", script)
-        self.assertGreaterEqual(timeout, 20.0)
+    def run_script(self, remote_path: str, args, timeout: float = 30.0) -> str:
+        self.events.append(f"script {args[0]}")
+        return self.scripts.pop(0)
 
 
-class CleanerBatchTests(unittest.TestCase):
-    def test_burst_deletes_contiguous_rows_and_stops_at_filter_gap(self) -> None:
-        row0 = _make_row(0, "delete-me-0")
-        row1 = _make_row(1, "delete-me-1")
-        row2 = _make_row(2, "delete-me-2")
-        row_keep = _make_row(3, "keep-me")
-        row4 = _make_row(4, "delete-me-4")
-
-        screens = {
-            # Initial screen before calibration
-            "dump-0": _make_screen(comment_rows=[row0, row1, row2, row_keep, row4]),
-            # Post long-press dump for calibration
-            "dump-1": _make_screen(delete_button=Bounds(400, 1140, 680, 1240)),
-            # After row0 deleted, row1 & row2 are contiguous before row_keep
-            "dump-2": _make_screen(comment_rows=[row1, row2, row_keep, row4]),
-            # After batch(row1, row2) deleted, row_keep is skipped and row4 is deleted
-            "dump-3": _make_screen(comment_rows=[row_keep, row4]),
-            # End of list
-            "dump-4": _make_screen(comment_rows=[], reached_end=True),
-        }
-
-        adb = FakeAdb()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = CleanerConfig(
-                fast=True,
-                batch_size=0,
-                exclude="keep-me",
-                log_file=Path(tmpdir) / "deleted.jsonl",
-            )
-            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
-            with (
-                patch("douyin_cleaner.cleaner.analyze_screen", side_effect=lambda xml, w, h: screens[xml]),
-                patch("douyin_cleaner.cleaner.time.sleep"),
-            ):
-                result = cleaner.run()
-
-        self.assertEqual(result.deleted_count, 4)
-        self.assertEqual(result.stopped_reason, "reached_end")
-        # 1 calibrated single delete, then batch of 2 (row1, row2), then batch of 1 (row4)
-        self.assertEqual(len(adb.long_presses), 1)
-        self.assertEqual([call[4] for call in adb.batch_calls], [2, 1])
-
-    def test_failed_batch_invalidates_cache_and_recalibrates(self) -> None:
-        row0 = _make_row(0)
-        row1 = _make_row(1)
-        row2 = _make_row(2)
-
-        screens = {
-            "dump-0": _make_screen(comment_rows=[row0, row1, row2]),
-            "dump-1": _make_screen(delete_button=Bounds(400, 1140, 680, 1240)),
-            "dump-2": _make_screen(comment_rows=[row1, row2]),
-            # Simulate row2 still present after batch(row1, row2) -> must recalibrate
-            "dump-3": _make_screen(comment_rows=[row2]),
-            "dump-4": _make_screen(delete_button=Bounds(400, 1140, 680, 1240)),
-            "dump-5": _make_screen(comment_rows=[], reached_end=True),
-        }
-
-        adb = FakeAdb()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = CleanerConfig(
-                fast=True,
-                batch_size=0,
-                log_file=Path(tmpdir) / "deleted.jsonl",
-            )
-            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
-            with (
-                patch("douyin_cleaner.cleaner.analyze_screen", side_effect=lambda xml, w, h: screens[xml]),
-                patch("douyin_cleaner.cleaner.time.sleep"),
-            ):
-                result = cleaner.run()
-
-        self.assertEqual(result.stopped_reason, "reached_end")
-        # Two full calibration long-presses: initial row0 + fallback row2
-        self.assertEqual(len(adb.long_presses), 2)
-        self.assertEqual([call[4] for call in adb.batch_calls], [2])
-
-    def test_blind_burst_skips_dumps_until_verify_every(self) -> None:
-        rows = [_make_row(i) for i in range(6)]
-        screens = {
-            # Initial screen before calibration (6 rows -> not near_end)
-            "dump-0": _make_screen(comment_rows=rows),
-            # Calibration dump
-            "dump-1": _make_screen(delete_button=Bounds(400, 1140, 680, 1240)),
-            # Post-calibration verification dump -> triggers burst #1 (5 items)
-            "dump-2": _make_screen(comment_rows=rows[1:] + [_make_row(6)]),
-            # Burst #2 skips dump! Next dump is dump-3 after verify_every=2 bursts
-            "dump-3": _make_screen(comment_rows=[], reached_end=True),
-        }
-
-        adb = FakeAdb()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = CleanerConfig(
-                fast=True,
-                batch_size=5,
-                verify_every=2,
-                audit_log=False,
-                log_file=Path(tmpdir) / "deleted.jsonl",
-            )
-            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
-            with (
-                patch("douyin_cleaner.cleaner.analyze_screen", side_effect=lambda xml, w, h: screens[xml]),
-                patch("douyin_cleaner.cleaner.time.sleep"),
-            ):
-                result = cleaner.run()
-
-        self.assertEqual(result.stopped_reason, "reached_end")
-        # 1 calibrated delete + 2 blind bursts of 5 = 11 total
-        self.assertEqual(result.deleted_count, 11)
-        self.assertEqual([call[4] for call in adb.batch_calls], [5, 5])
-        # Only 4 dumps total (dump-0..dump-3); burst #2 skipped dumping
-        self.assertEqual(adb.dump_index, 4)
-        # Audit log disabled -> file should not be created
-        self.assertFalse((Path(tmpdir) / "deleted.jsonl").exists())
-
-    def test_refuses_to_start_outside_comment_list_activity(self) -> None:
-        adb = FakeAdb()
-        adb.get_foreground_activity = lambda: (  # type: ignore[method-assign]
-            "com.ss.android.ugc.aweme",
-            "com.ss.android.ugc.aweme.splash.SplashActivity",
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = CleanerConfig(log_file=Path(tmpdir) / "deleted.jsonl")
-            cleaner = CommentCleaner(adb=adb, config=cfg)  # type: ignore[arg-type]
+def _run(adb: FakeAdb, **cfg) -> tuple:
+    screens = adb.screens
+    with tempfile.TemporaryDirectory() as tmp:
+        config = CleanerConfig(log_file=Path(tmp) / "log.jsonl", **cfg)
+        cleaner = CommentCleaner(adb=adb, config=config)  # type: ignore[arg-type]
+        with (
+            patch(
+                "douyin_cleaner.cleaner.analyze_screen",
+                side_effect=lambda *_: screens.pop(0),
+            ),
+            patch("douyin_cleaner.cleaner.time.sleep"),
+        ):
             result = cleaner.run()
+    return result, cleaner
 
-        self.assertEqual(result.deleted_count, 0)
+
+class ParseTests(unittest.TestCase):
+    def test_parse_probe(self) -> None:
+        state = parse_probe("STATE dialog 28 1066 1052 1318\r\n")
+        assert state is not None
+        self.assertEqual(state.kind, "dialog")
+        self.assertEqual((state.width, state.height), (1024, 252))
+
+    def test_parse_burst_counts_only_verified_ok_lines(self) -> None:
+        self.assertEqual(parse_burst("OK\nOK\nDONE\n").deleted, 2)
+        self.assertTrue(parse_burst("OK\nOK\nDONE\n").completed)
+        fail = parse_burst("OK\nFAIL popup other\n")
+        self.assertEqual((fail.deleted, fail.completed, fail.failure), (1, False, "popup:other"))
+        cut = parse_burst("OK\nOK\n")
+        self.assertEqual((cut.deleted, cut.completed, cut.failure), (2, False, "interrupted"))
+
+
+class CleanerTests(unittest.TestCase):
+    def _rows(self, start: int, n: int = 6) -> list[CommentRow]:
+        return [_row(i) for i in range(start, start + n)]
+
+    def test_refuses_to_start_outside_comment_list(self) -> None:
+        adb = FakeAdb([], [])
+        adb.foreground = [(DOUYIN, "com.ss.android.ugc.aweme.splash.SplashActivity")]
+        result, _ = _run(adb)
         self.assertEqual(result.stopped_reason, "wrong_app_or_activity")
-        self.assertEqual(adb.dump_index, 0)
-        self.assertEqual(adb.long_presses, [])
-        self.assertEqual(adb.batch_calls, [])
+        self.assertNotIn("dump", adb.events)
+
+    def test_calibrates_then_bursts_and_counts_verified_deletions(self) -> None:
+        screens = [
+            _screen(self._rows(0)),  # preflight
+            _screen(self._rows(0)),  # loop: top row 0
+            _screen(delete_button=DELETE_BTN),  # after long-press
+            _screen(self._rows(1)),  # after delete tap (no confirm)
+            _screen(self._rows(1)),  # loop: calibrated -> burst
+            _screen(self._rows(4)),  # progress verification
+            _screen([], reached_end=True),  # loop: end
+        ]
+        scripts = [PROBE_DIALOG, "OK\nOK\nOK\nFAIL popup list\n"]
+        adb = FakeAdb(screens, scripts)
+        result, cleaner = _run(adb)
+
+        self.assertEqual(result.stopped_reason, "reached_end")
+        self.assertEqual(result.deleted_count, 4)  # 1 verified + 3 burst OK lines
+        # Failure with progress keeps calibration for the next burst
+        self.assertIsNotNone(cleaner.calibration)
+
+    def test_burst_failure_without_progress_drops_calibration(self) -> None:
+        screens = [
+            _screen(self._rows(0)),
+            _screen(self._rows(0)),
+            _screen(delete_button=DELETE_BTN),
+            _screen(self._rows(1)),
+            _screen(self._rows(1)),  # burst attempt fails immediately
+            _screen([], reached_end=True),
+        ]
+        adb = FakeAdb(screens, [PROBE_DIALOG, "FAIL popup list\n"])
+        result, cleaner = _run(adb)
+        self.assertEqual(result.deleted_count, 1)
+        self.assertIsNone(cleaner.calibration)
+
+    def test_drift_recovery_presses_back_at_most_once(self) -> None:
+        detail = (DOUYIN, "com.ss.android.ugc.aweme.detail.ui.DetailActivity")
+        screens = [_screen(self._rows(0))]
+        adb = FakeAdb(screens, [])
+        # preflight ok, then loop sees detail page twice (before and after one BACK)
+        adb.foreground = [(DOUYIN, LIST_ACT), detail, detail]
+        result, _ = _run(adb)
+        self.assertEqual(result.stopped_reason, "lost_comment_list")
+        self.assertEqual(adb.events.count("back"), 1)
+
+    def test_no_burst_when_menu_is_not_a_separate_window(self) -> None:
+        screens = [
+            _screen(self._rows(0)),
+            _screen(self._rows(0)),
+            _screen(delete_button=DELETE_BTN),
+            _screen(self._rows(1)),
+            _screen([], reached_end=True),
+        ]
+        adb = FakeAdb(screens, ["STATE list 0 0 1080 2340\n"])
+        result, cleaner = _run(adb)
+        self.assertEqual(result.deleted_count, 1)
+        self.assertFalse(cleaner.burst_supported)
+        self.assertNotIn("script burst", adb.events)
+
+    def test_filters_use_verified_path_only(self) -> None:
+        keep = _row(0, "keep-me")
+        drop = _row(1, "drop-me")
+        screens = [
+            _screen([keep, drop]),
+            _screen([keep, drop]),
+            _screen(delete_button=DELETE_BTN),
+            _screen([keep]),
+            _screen([keep], reached_end=True),
+        ]
+        adb = FakeAdb(screens, [])
+        result, _ = _run(adb, exclude="keep")
+        self.assertEqual(result.deleted_count, 1)
+        self.assertNotIn("push", adb.events)
+        self.assertIn(f"long_press {drop.tap_point[0]},{drop.tap_point[1]}", adb.events)
+
+    def test_stops_when_bursts_make_no_progress(self) -> None:
+        rows = self._rows(0)
+        screens = [
+            _screen(rows),
+            _screen(rows),
+            _screen(delete_button=DELETE_BTN),
+            _screen(self._rows(1)),
+            _screen(self._rows(1)),  # burst #1
+            _screen(self._rows(1)),  # verify: unchanged -> recalibrate
+            _screen(self._rows(1)),  # loop: verified delete (recalibration)
+            _screen(delete_button=DELETE_BTN),
+            _screen(self._rows(1)),  # delete did not take effect
+            _screen(self._rows(1)),  # burst #2
+            _screen(self._rows(1)),  # verify: unchanged again -> stop
+        ]
+        scripts = [PROBE_DIALOG, "OK\nOK\nFAIL popup list\n", PROBE_DIALOG, "OK\nFAIL popup list\n"]
+        adb = FakeAdb(screens, scripts)
+        result, _ = _run(adb)
+        self.assertEqual(result.stopped_reason, "no_progress")
+
+    def test_captcha_stops_run(self) -> None:
+        screens = [_screen(self._rows(0)), _screen(self._rows(0), captcha="请完成验证")]
+        result, _ = _run(FakeAdb(screens, []))
+        self.assertEqual(result.stopped_reason, "rate_limit_or_captcha")
 
 
 if __name__ == "__main__":

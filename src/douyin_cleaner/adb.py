@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 import time
 from typing import Sequence
 
@@ -230,64 +232,31 @@ class AdbClient:
             ]
         )
 
-    def batch_long_press_and_tap(
-        self,
-        press_x: int,
-        press_y: int,
-        tap_x: int,
-        tap_y: int,
-        *,
-        count: int,
-        long_press_ms: int = 450,
-        popup_settle_s: float = 0.15,
-        after_tap_s: float = 0.25,
-        delays_s: Sequence[float] | None = None,
-    ) -> None:
-        """Execute multiple long-press + tap pairs in a single adb shell call."""
-        if count <= 0:
-            return
+    def push_text(self, content: str, remote_path: str) -> None:
+        """Write `content` to `remote_path` on the device via `adb push`."""
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".sh", delete=False
+        ) as fp:
+            fp.write(content)
+            local_path = fp.name
+        try:
+            self._run(["push", local_path, remote_path], timeout=20.0)
+        finally:
+            os.unlink(local_path)
 
-        px, py = int(press_x), int(press_y)
-        tx, ty = int(tap_x), int(tap_y)
-        lp_ms = int(long_press_ms)
+    def run_script(
+        self, remote_path: str, args: Sequence[str], timeout: float = 30.0
+    ) -> str:
+        """Run a pushed shell script and return stdout, tolerating non-zero exit.
 
-        if not delays_s:
-            body_parts = [f"input swipe {px} {py} {px} {py} {lp_ms}"]
-            if popup_settle_s > 0:
-                body_parts.append(f"sleep {popup_settle_s:.3f}")
-            body_parts.append(f"input tap {tx} {ty}")
-            if after_tap_s > 0:
-                body_parts.append(f"sleep {after_tap_s:.3f}")
-            body = "; ".join(body_parts)
-            script = (
-                f"i=0; while [ $i -lt {count} ]; do {body}; i=$((i+1)); done"
-            )
-            per_item_s = lp_ms / 1000.0 + 0.5 + max(0.0, popup_settle_s) + max(0.0, after_tap_s)
-            timeout = max(20.0, per_item_s * count * 2.0 + 10.0)
-            self._run(["shell", script], timeout=timeout)
-            return
-
-        cmds: list[str] = []
-        estimated_s = 0.0
-        for idx in range(count):
-            cmds.append(f"input swipe {px} {py} {px} {py} {lp_ms}")
-            estimated_s += lp_ms / 1000.0 + 0.25
-            if popup_settle_s > 0:
-                cmds.append(f"sleep {popup_settle_s:.3f}")
-                estimated_s += popup_settle_s
-            cmds.append(f"input tap {tx} {ty}")
-            estimated_s += 0.25
-
-            extra = delays_s[idx] if idx < len(delays_s) else 0.0
-            tail_sleep = (after_tap_s if idx < count - 1 else popup_settle_s) + max(
-                0.0, extra
-            )
-            if tail_sleep > 0:
-                cmds.append(f"sleep {tail_sleep:.3f}")
-                estimated_s += tail_sleep
-
-        timeout = max(20.0, estimated_s * 2.0 + 10.0)
-        self._run(["shell", "; ".join(cmds)], timeout=timeout)
+        Partial stdout is still returned when the adb transport drops mid-run, so
+        callers can account for the work that was reported before the failure.
+        """
+        return self._run(
+            ["shell", "sh", remote_path, *[str(a) for a in args]],
+            timeout=timeout,
+            check=False,
+        )
 
     def swipe(
         self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400

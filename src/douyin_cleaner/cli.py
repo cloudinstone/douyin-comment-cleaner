@@ -76,31 +76,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Long-press duration in milliseconds (default: 550)",
     )
     run_p.add_argument(
-        "--no-fast",
+        "--no-burst",
         action="store_true",
-        help="Disable adaptive fast-path (blind tap) deletion",
-    )
-    run_p.add_argument(
-        "--batch-size",
-        type=int,
-        default=6,
-        help=(
-            "Comments per burst in fast mode (default: 6; 1 = verify every item)"
-        ),
-    )
-    run_p.add_argument(
-        "--verify-every",
-        type=int,
-        default=5,
-        help=(
-            "Run a full UI hierarchy dump every N bursts in blind-burst mode "
-            "(default: 5; foreground drift is still checked after every burst)"
-        ),
+        help="Disable on-device burst mode; verify every comment with a UI dump (slower)",
     )
     run_p.add_argument(
         "--audit-log",
         action="store_true",
-        help="Enable per-comment JSONL audit logging (limits bursts to visible rows)",
+        help="Record each deleted comment's text to JSONL (uses the slower verified mode)",
     )
     run_p.add_argument(
         "--max-empty-scrolls",
@@ -207,12 +190,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.limit < 0:
         print("Error: --limit must be >= 0.", file=sys.stderr)
         return 2
-    if args.batch_size < 0:
-        print("Error: --batch-size must be >= 0.", file=sys.stderr)
-        return 2
-    if args.verify_every < 1:
-        print("Error: --verify-every must be >= 1.", file=sys.stderr)
-        return 2
 
     audit_log = args.audit_log or (args.log_file is not None)
     log_file = args.log_file or Path("logs/deleted_comments.jsonl")
@@ -225,9 +202,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         long_press_ms=args.long_press_ms,
         max_empty_scrolls=args.max_empty_scrolls,
         dry_run=args.dry_run,
-        fast=not args.no_fast,
-        batch_size=args.batch_size,
-        verify_every=args.verify_every,
+        burst=not args.no_burst,
         audit_log=audit_log,
         contains=args.contains,
         exclude=args.exclude,
@@ -239,7 +214,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print(
             f"\n[INTERRUPTED] Deleted {cleaner.deleted_count} comment(s), "
-            f"skipped {len(cleaner.skipped_fingerprints)}."
+            f"skipped {len(cleaner.skipped)}."
         )
         return 130
 
