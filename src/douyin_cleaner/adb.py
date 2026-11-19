@@ -148,6 +148,8 @@ class AdbClient:
         for token in reversed(focus_matches):
             if "/" in token:
                 pkg, act = token.split("/", 1)
+                if act.startswith("."):
+                    act = f"{pkg}{act}"
                 return pkg, act
 
         # Fall back to mFocusedApp ActivityRecord (useful when shade/keyguard overlays)
@@ -157,6 +159,8 @@ class AdbClient:
         for token in reversed(app_matches):
             if "/" in token:
                 pkg, act = token.split("/", 1)
+                if act.startswith("."):
+                    act = f"{pkg}{act}"
                 return pkg, act
 
         return "", ""

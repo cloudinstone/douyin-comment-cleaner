@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .adb import AdbClient
+from .adb import AdbClient, AdbError
 from .parser import Bounds, CommentRow, ScreenAnalysis, analyze_screen
 
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
@@ -377,17 +377,23 @@ class CommentCleaner:
         high = max(self.config.min_delay, self.config.max_delay)
         delays = [random.uniform(low, high) for _ in range(count)] if high > 0 else None
 
-        self.adb.batch_long_press_and_tap(
-            tx,
-            ty,
-            target_x,
-            target_y,
-            count=count,
-            long_press_ms=self.config.long_press_ms,
-            popup_settle_s=SETTLE_DELAY,
-            after_tap_s=BATCH_ROW_SETTLE_DELAY,
-            delays_s=delays,
-        )
+        try:
+            self.adb.batch_long_press_and_tap(
+                tx,
+                ty,
+                target_x,
+                target_y,
+                count=count,
+                long_press_ms=self.config.long_press_ms,
+                popup_settle_s=SETTLE_DELAY,
+                after_tap_s=BATCH_ROW_SETTLE_DELAY,
+                delays_s=delays,
+            )
+        except AdbError as exc:
+            print(f"[WARN] Burst ADB error ({exc}); resetting cache to re-verify...")
+            self._reset_fast_cache()
+            time.sleep(0.5)
+            return
 
         self.deleted_count += count
         self.empty_scrolls = 0
