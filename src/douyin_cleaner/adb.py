@@ -235,7 +235,7 @@ class AdbClient:
     def push_text(self, content: str, remote_path: str) -> None:
         """Write `content` to `remote_path` on the device via `adb push`."""
         with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", suffix=".sh", delete=False
+            "w", encoding="utf-8", newline="\n", suffix=".sh", delete=False
         ) as fp:
             fp.write(content)
             local_path = fp.name

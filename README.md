@@ -21,6 +21,7 @@
 
 - 电脑安装 [`adb`](https://developer.android.com/tools/adb)（Android platform-tools）和 Python >= 3.10
   - macOS：`brew install --cask android-platform-tools`
+  - Windows：`winget install Google.PlatformTools`（或从官网解压后将目录加入系统环境变量 `Path`）
 - 安卓手机或模拟器，已开启 **USB 调试**，并已登录抖音
 - `adb devices` 中设备状态为 `device`（不是 `unauthorized`）
 
@@ -37,11 +38,16 @@
 git clone https://github.com/cloudinstone/douyin-comment-cleaner.git
 cd douyin-comment-cleaner
 
+# macOS / Linux:
 ./douyin-comment-cleaner status          # 检查设备、锁屏状态、抖音页面是否就绪
 ./douyin-comment-cleaner inspect         # 查看识别到的评论条目（只读）
 ./douyin-comment-cleaner run --dry-run   # 演练，不点击
 ./douyin-comment-cleaner run --limit 1   # 先删 1 条，确认确实被删掉
 ./douyin-comment-cleaner run             # 全部删除
+
+# Windows（PowerShell / CMD）:
+python -m douyin_cleaner.cli status
+python -m douyin_cleaner.cli run
 ```
 
 也可以安装为全局命令：
