@@ -9,7 +9,12 @@ from typing import Sequence
 
 from . import __version__
 from .adb import AdbClient, AdbError
-from .cleaner import DOUYIN_PACKAGE, CleanerConfig, CommentCleaner
+from .cleaner import (
+    COMMENT_LIST_ACTIVITY_HINTS,
+    DOUYIN_PACKAGE,
+    CleanerConfig,
+    CommentCleaner,
+)
 from .parser import analyze_screen
 
 
@@ -107,6 +112,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSONL audit log output path (implies --audit-log when specified)",
     )
+    run_p.add_argument(
+        "--skip-subtab-check",
+        action="store_true",
+        help="Allow starting when '发出的评论' header is scrolled out of view",
+    )
 
     return parser
 
@@ -121,7 +131,7 @@ def _cmd_status(serial: str | None) -> int:
 
     in_douyin = pkg == DOUYIN_PACKAGE
     in_comment_list = in_douyin and (
-        "NotificationDetailActivity" in act or "Comment" in act
+        any(hint in act for hint in COMMENT_LIST_ACTIVITY_HINTS) or "Comment" in act
     )
 
     print(f"Device:       {model} ({resolved})")
@@ -204,6 +214,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         burst=not args.no_burst,
         audit_log=audit_log,
+        skip_subtab_check=args.skip_subtab_check,
         contains=args.contains,
         exclude=args.exclude,
         log_file=log_file,

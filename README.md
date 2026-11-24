@@ -70,6 +70,7 @@ douyin-comment-cleaner status
 | `--long-press-ms` | `550` | 长按时长（毫秒） |
 | `--no-burst` | 关 | 禁用端侧闭环快速删除模式，全程使用逐条 UI 校验（较慢） |
 | `--audit-log` | 关 | 记录每条删除的评论原文到 JSONL 文件（会自动切换为逐条 UI 校验模式） |
+| `--skip-subtab-check` | 关 | 启动时跳过「发出的评论」顶部标签可见性检查（适用于已向下滚动导致筛选栏收起的页面） |
 | `--max-empty-scrolls` | `5` | 连续滚动多少次没有新评论后停止 |
 | `--contains TEXT` | – | 只删除包含 `TEXT` 的评论 |
 | `--exclude TEXT` | – | 跳过包含 `TEXT` 的评论 |

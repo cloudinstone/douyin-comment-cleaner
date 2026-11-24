@@ -29,7 +29,10 @@ from .burst import (
 from .parser import Bounds, CommentRow, ScreenAnalysis, analyze_screen
 
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
-COMMENT_LIST_ACTIVITY_HINTS = ("NotificationDetailActivity",)
+COMMENT_LIST_ACTIVITY_HINTS = (
+    "NotificationDetailActivity",
+    "IntegratedInteractionActivity",
+)
 
 POPUP_WAIT_S = 0.3  # wait after long-press before dumping the popup
 AFTER_TAP_S = 0.3  # wait after tapping a dialog button
@@ -62,6 +65,7 @@ class CleanerConfig:
     contains: str | None = None
     exclude: str | None = None
     audit_log: bool = False
+    skip_subtab_check: bool = False
     log_file: Path = Path("logs/deleted_comments.jsonl")
 
 
@@ -134,10 +138,11 @@ class CommentCleaner:
             )
         self.list_activity = act
         analysis = self._dump()
-        if analysis.subtab_sent_selected is not True:
+        if not self.config.skip_subtab_check and analysis.subtab_sent_selected is not True:
             raise StopRun(
                 "wrong_subtab",
-                "Sub-tab '发出的评论' is not visible/selected. Switch to it first.",
+                "Sub-tab '发出的评论' is not visible/selected. Switch to it first "
+                "(or pass --skip-subtab-check if the header is scrolled out of view).",
             )
 
     def _loop(self) -> str:

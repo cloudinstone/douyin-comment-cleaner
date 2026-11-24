@@ -25,6 +25,9 @@ TAB_LABELS = frozenset(
         "同城",
     }
 )
+OTHER_FILTER_LABELS = frozenset(
+    {"全部", "全部消息", "收到的评论", "赞和收藏", "赞", "艾特我的", "@我的"}
+)
 
 DELETE_LABELS = ("删除", "删除评论")
 CONFIRM_LABELS = ("确认删除", "确认", "确定")
@@ -283,13 +286,32 @@ def _detect_popup_menu(nodes: list[UINode], screen_height: int) -> bool:
     return action_hits >= 2
 
 
-def _find_sent_subtab(nodes: list[UINode]) -> tuple[UINode | None, bool | None]:
+def _find_sent_subtab(
+    nodes: list[UINode], screen_height: int = 2340
+) -> tuple[UINode | None, bool | None]:
     for node in nodes:
+        if _is_comment_text_widget(node):
+            continue
         if _node_label(node) == "发出的评论":
-            is_selected = node.selected or (
+            if node.selected or (
                 node.parent is not None and node.parent.selected
+            ):
+                return node, True
+            is_tab_widget = "Tab" in node.class_name or (
+                node.parent is not None and "Tab" in node.parent.class_name
             )
-            return node, is_selected
+            has_sibling_filter = any(
+                _node_label(n) in OTHER_FILTER_LABELS
+                and n.bounds.top < int(screen_height * 0.35)
+                for n in nodes
+            )
+            if (
+                not is_tab_widget
+                and not has_sibling_filter
+                and node.bounds.top < int(screen_height * 0.20)
+            ):
+                return node, True
+            return node, False
     return None, None
 
 
@@ -324,9 +346,9 @@ def _promote_to_row_container(
 def _extract_comment_rows(
     nodes: list[UINode], screen_width: int, screen_height: int
 ) -> list[CommentRow]:
-    min_top = int(screen_height * 0.15)
+    min_top = int(screen_height * 0.10)
     max_bottom = int(screen_height * 0.94)
-    min_center_y = int(screen_height * 0.16)
+    min_center_y = int(screen_height * 0.12)
     max_center_y = int(screen_height * 0.92)
     min_height = int(screen_height * 0.035)
     max_height = int(screen_height * 0.45)
@@ -437,7 +459,7 @@ def analyze_screen(
     delete_button = _find_action_button(nodes, DELETE_LABELS, screen_height)
     confirm_button = _find_action_button(nodes, CONFIRM_LABELS, screen_height)
     has_popup_menu = _detect_popup_menu(nodes, screen_height)
-    subtab_node, subtab_selected = _find_sent_subtab(nodes)
+    subtab_node, subtab_selected = _find_sent_subtab(nodes, screen_height)
 
     comment_rows: list[CommentRow] = []
     if not is_lockscreen and delete_button is None and confirm_button is None:

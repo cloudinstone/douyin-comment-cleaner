@@ -37,6 +37,7 @@ def _screen(
     popup: bool = False,
     reached_end: bool = False,
     captcha: str | None = None,
+    subtab_sent_selected: bool | None = True,
 ) -> ScreenAnalysis:
     return ScreenAnalysis(
         package=DOUYIN,
@@ -46,7 +47,7 @@ def _screen(
         confirm_button=None,
         has_popup_menu=popup or delete_button is not None,
         subtab_sent_comments=None,
-        subtab_sent_selected=True,
+        subtab_sent_selected=subtab_sent_selected,
         comment_rows=rows or [],
         reached_end=reached_end,
     )
@@ -249,6 +250,44 @@ class CleanerTests(unittest.TestCase):
         screens = [_screen(self._rows(0)), _screen(self._rows(0), captcha="请完成验证")]
         result, _ = _run(FakeAdb(screens, []))
         self.assertEqual(result.stopped_reason, "rate_limit_or_captcha")
+
+    def test_accepts_integrated_interaction_activity(self) -> None:
+        integrated_act = (
+            "com.ss.android.ugc.aweme.socialnotice.view.activity.IntegratedInteractionActivity"
+        )
+        screens = [
+            _screen(self._rows(0)),
+            _screen([], reached_end=True),
+        ]
+        adb = FakeAdb(screens, [])
+        adb.foreground = [(DOUYIN, integrated_act), (DOUYIN, integrated_act)]
+        result, _ = _run(adb)
+        self.assertEqual(result.stopped_reason, "reached_end")
+
+    def test_skip_subtab_check_allows_hidden_subtab_at_preflight(self) -> None:
+        adb_default = FakeAdb([_screen(self._rows(0), subtab_sent_selected=None)], [])
+        res_default, _ = _run(adb_default)
+        self.assertEqual(res_default.stopped_reason, "wrong_subtab")
+
+        adb_skip_ok = FakeAdb(
+            [
+                _screen(self._rows(0), subtab_sent_selected=None),
+                _screen([], reached_end=True, subtab_sent_selected=None),
+            ],
+            [],
+        )
+        res_skip_ok, _ = _run(adb_skip_ok, skip_subtab_check=True)
+        self.assertEqual(res_skip_ok.stopped_reason, "reached_end")
+
+        adb_later_false = FakeAdb(
+            [
+                _screen(self._rows(0), subtab_sent_selected=None),
+                _screen(self._rows(0), subtab_sent_selected=False),
+            ],
+            [],
+        )
+        res_later_false, _ = _run(adb_later_false, skip_subtab_check=True)
+        self.assertEqual(res_later_false.stopped_reason, "wrong_subtab")
 
 
 if __name__ == "__main__":

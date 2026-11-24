@@ -148,6 +148,39 @@ class ParserTests(unittest.TestCase):
         self.assertIn("测试用户C", analysis.comment_rows[0].texts)
         self.assertIn("回复了评论: 你好", analysis.comment_rows[0].texts)
 
+    def test_dropdown_sent_header_detected_as_selected(self) -> None:
+        xml = """<?xml version='1.0' encoding='UTF-8' ?>
+        <hierarchy rotation="0">
+          <node text="发出的评论" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="true" long-clickable="false" selected="false" bounds="[380,120][660,190]" />
+        </hierarchy>
+        """
+        analysis = analyze_screen(xml, 1080, 2340)
+        self.assertTrue(analysis.subtab_sent_selected)
+
+    def test_open_dropdown_menu_with_siblings_not_treated_as_selected(self) -> None:
+        xml = """<?xml version='1.0' encoding='UTF-8' ?>
+        <hierarchy rotation="0">
+          <node text="全部消息" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="true" long-clickable="false" selected="false" bounds="[120,250][400,320]" />
+          <node text="发出的评论" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="true" long-clickable="false" selected="false" bounds="[120,330][400,400]" />
+          <node text="收到的评论" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="true" long-clickable="false" selected="false" bounds="[120,410][400,480]" />
+        </hierarchy>
+        """
+        analysis = analyze_screen(xml, 1080, 2340)
+        self.assertFalse(analysis.subtab_sent_selected)
+
+    def test_top_row_extracted_when_subtab_collapsed(self) -> None:
+        xml = """<?xml version='1.0' encoding='UTF-8' ?>
+        <hierarchy rotation="0">
+          <node text="" class="android.view.ViewGroup" package="com.ss.android.ugc.aweme" clickable="true" long-clickable="true" selected="false" bounds="[0,246][1080,483]">
+            <node text="测试用户D" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="false" long-clickable="false" selected="false" bounds="[213,277][400,333]" />
+            <node text="顶部第一条完整评论" class="android.widget.TextView" package="com.ss.android.ugc.aweme" clickable="false" long-clickable="false" selected="false" bounds="[213,343][888,452]" />
+          </node>
+        </hierarchy>
+        """
+        analysis = analyze_screen(xml, 1080, 2340)
+        self.assertEqual(len(analysis.comment_rows), 1)
+        self.assertEqual(analysis.comment_rows[0].bounds, Bounds(0, 246, 1080, 483))
+
 
 if __name__ == "__main__":
     unittest.main()
